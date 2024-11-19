@@ -77,6 +77,32 @@ func (b *BeaconState) NextSyncCommitteeProof(ctx context.Context) ([][]byte, err
 	return trie.ProofFromMerkleLayers(b.merkleLayers, types.NextSyncCommittee.RealPosition()), nil
 }
 
+// ValidatorProof from the state's Merkle trie representation.
+func (b *BeaconState) ValidatorProof(ctx context.Context) ([][]byte, error) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	if b.version == version.Phase0 {
+		return nil, errNotSupported("ValidatorProof", b.version)
+	}
+
+	if err := b.initializeMerkleLayers(ctx); err != nil {
+		return nil, err
+	}
+	if err := b.recomputeDirtyFields(ctx); err != nil {
+		return nil, err
+	}
+	
+	proof := make([][]byte, 0)
+	//proof = append(proof, [])
+	branch := trie.ProofFromMerkleLayers(b.merkleLayers, types.Validators.RealPosition())
+	proof = append(proof, branch...)
+	return proof, nil
+
+
+	return trie.ProofFromMerkleLayers(b.merkleLayers, types.Validators.RealPosition()), nil
+}
+
 // FinalizedRootProof crafts a Merkle proof for the finalized root
 // contained within the finalized checkpoint of a beacon state.
 func (b *BeaconState) FinalizedRootProof(ctx context.Context) ([][]byte, error) {
