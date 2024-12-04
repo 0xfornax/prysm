@@ -3,13 +3,16 @@ package stateutil
 import (
 	"bytes"
 	"encoding/binary"
+	"math/bits"
 	"runtime"
 	"sync"
 
 	"github.com/pkg/errors"
 	fieldparams "github.com/prysmaticlabs/prysm/v5/config/fieldparams"
+	"github.com/prysmaticlabs/prysm/v5/crypto/hash"
 	"github.com/prysmaticlabs/prysm/v5/crypto/hash/htr"
 	"github.com/prysmaticlabs/prysm/v5/encoding/ssz"
+
 	ethpb "github.com/prysmaticlabs/prysm/v5/proto/prysm/v1alpha1"
 	"github.com/sirupsen/logrus"
 )
@@ -104,4 +107,78 @@ func OptimizedValidatorRoots(validators []*ethpb.Validator) ([][32]byte, error) 
 		roots = htr.VectorizedSha256(roots)
 	}
 	return roots, nil
+}
+
+// ValidatorRegistryProof computes the merkle proof for a validator at a specific index
+// in the validator registry.
+func ValidatorRegistryProof(validators []*ethpb.Validator, index uint64) ([][32]byte, error) {
+	if index >= uint64(len(validators)) {
+		return nil, errors.New("validator index out of bounds")
+	}
+
+	// First get all validator roots
+	roots, err := OptimizedValidatorRoots(validators)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not get validator roots")
+	}
+
+	depth := bits.Len64(uint64(len(validators) - 1)) // Calculate required depth
+
+	// Generate proof
+	proof := make([][32]byte, depth)
+	tmp := roots
+	for h := 0; h < depth; h++ {
+		// Get the sibling index at height "h"
+		idx := (index >> h) ^ 1
+		if idx < uint64(len(tmp)) {
+			proof[h] = tmp[idx]
+		}
+
+		// Move up one level in the tree
+		newSize := (len(tmp) + 1) / 2
+		newTmp := make([][32]byte, newSize)
+		for i := 0; i < len(tmp)-1; i += 2 {
+			concat := append(tmp[i][:], tmp[i+1][:]...)
+			newTmp[i/2] = hash.Hash(concat)
+		}
+		// Handle odd number of elements
+		if len(tmp)%2 == 1 {
+			concat := append(tmp[len(tmp)-1][:], make([]byte, 32)...)
+			newTmp[len(newTmp)-1] = hash.Hash(concat)
+		}
+		tmp = newTmp
+	}
+
+	return proof, nil
+}
+
+// VerifyValidatorProof verifies a merkle proof for a validator
+func VerifyValidatorProof(validator *ethpb.Validator, index uint64, proof [][32]byte, root [32]byte) (bool, error) {
+	// Get validator root
+	validatorRoots, err := ValidatorFieldRoots(validator)
+	if err != nil {
+		return false, errors.Wrap(err, "could not get validator field roots")
+	}
+
+	// Hash up to get single validator root
+	roots := validatorRoots
+	for i := 0; i < validatorTreeDepth; i++ {
+		roots = htr.VectorizedSha256(roots)
+	}
+	leaf := roots[0]
+
+	// Verify the proof
+	currentRoot := leaf
+	for i, proofElement := range proof {
+		position := (index >> uint(i)) & 1
+		if position == 1 {
+			concat := append(proofElement[:], currentRoot[:]...)
+			currentRoot = hash.Hash(concat)
+		} else {
+			concat := append(currentRoot[:], proofElement[:]...)
+			currentRoot = hash.Hash(concat)
+		}
+	}
+
+	return bytes.Equal(currentRoot[:], root[:]), nil
 }

@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 
 	"github.com/prysmaticlabs/prysm/v5/beacon-chain/state/state-native/types"
+	"github.com/prysmaticlabs/prysm/v5/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/v5/container/trie"
+
 	"github.com/prysmaticlabs/prysm/v5/encoding/bytesutil"
 	"github.com/prysmaticlabs/prysm/v5/runtime/version"
 )
@@ -78,7 +80,7 @@ func (b *BeaconState) NextSyncCommitteeProof(ctx context.Context) ([][]byte, err
 }
 
 // ValidatorProof from the state's Merkle trie representation.
-func (b *BeaconState) ValidatorProof(ctx context.Context) ([][]byte, error) {
+func (b *BeaconState) ValidatorProof(ctx context.Context, index uint64) ([][]byte, error) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
@@ -92,15 +94,21 @@ func (b *BeaconState) ValidatorProof(ctx context.Context) ([][]byte, error) {
 	if err := b.recomputeDirtyFields(ctx); err != nil {
 		return nil, err
 	}
-	
+
 	proof := make([][]byte, 0)
-	//proof = append(proof, [])
-	branch := trie.ProofFromMerkleLayers(b.merkleLayers, types.Validators.RealPosition())
-	proof = append(proof, branch...)
+
+	// Start by calculating the validator leaf proof
+	proofs, err := stateutil.ValidatorRegistryProof(b.validators, index)
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < len(proofs); i++ {
+		proof = append(proof, proofs[i][:])
+	}
+
+	branchProof := trie.ProofFromMerkleLayers(b.merkleLayers, types.Validators.RealPosition())
+	proof = append(proof, branchProof...)
 	return proof, nil
-
-
-	return trie.ProofFromMerkleLayers(b.merkleLayers, types.Validators.RealPosition()), nil
 }
 
 // FinalizedRootProof crafts a Merkle proof for the finalized root
